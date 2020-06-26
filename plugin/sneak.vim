@@ -15,7 +15,7 @@ set cpo&vim
 "     opfunc    : &operatorfunc at g@ invocation.
 "     opfunc_st : State during last 'operatorfunc' (g@) invocation.
 let s:st = { 'rst':1, 'input':'', 'inputlen':0, 'reverse':0, 'bounds':[0,0],
-      \'inclusive':0, 'label':'', 'opfunc':'', 'opfunc_st':{} }
+      \'inclusive':0, 'label':'', 'opfunc':'', 'opfunc_st':{}, 'ft_orig_maps':{} }
 
 if exists('##OptionSet')
   augroup sneak_optionset
@@ -259,33 +259,63 @@ func! s:attach_autocmds() abort
 endf
 
 func! sneak#reset(key) abort
-  let c = sneak#util#getchar()
-
+  let expr_map = v:false
+  let rhs = a:key
   let s:st.rst = 1
   let s:st.reverse = 0
-  for k in ['f', 't'] "unmap the temp mappings
-    if g:sneak#opt[k.'_reset']
-      silent! exec 'unmap '.k
-      silent! exec 'unmap '.toupper(k)
-    endif
+  for k in ['f', 't', 'F', 'T'] "unmap the temp mappings
+    for m in ['n', 'x']
+      let mapargs = s:st.ft_orig_maps[m][k]
+      if g:sneak#opt[tolower(k).'_reset']
+
+        if mapargs['rhs'] ==# ''
+          silent! exec 'unmap '.k
+        else
+          if a:key ==# k
+            let expr_map = mapargs['expr']
+            let rhs = mapargs['rhs']
+          endif
+          " TODO is mapargs['noremap'] right?
+          " TODO handle the other options
+          silent execute m
+                \. (mapargs['noremap'] ? 'noremap' : 'map')
+                \. ' '
+                \. (mapargs['buffer'] ? '<buffer>' : '')
+                \. (mapargs['expr'] ? '<expr>' : '')
+                \. (mapargs['silent'] ? '<silent>' : '')
+                \. ' '
+                \. k
+                \. ' '
+                \. mapargs['rhs']
+        endif
+      endif
+    endfor
   endfor
 
   "count is prepended implicitly by the <expr> mapping
-  return a:key.c
+  if expr_map
+    silent return eval(rhs)
+  endif
+  return rhs
 endf
 
 func! s:map_reset_key(key, mode) abort
+  let s:st.ft_orig_maps[a:mode] = get(s:st.ft_orig_maps, a:mode, {})
+  " TODO handle changing maps
+  if get(s:st.ft_orig_maps[a:mode], a:key, {}) == {}
+    let s:st.ft_orig_maps[a:mode][a:key] = maparg(a:key, a:mode, v:false, v:true)
+  endif
   exec printf("%snoremap <silent> <expr> %s sneak#reset('%s')", a:mode, a:key, a:key)
 endf
 
 " Sets temporary mappings to 'hook' into f/F/t/T.
 func! s:ft_hook() abort
-  for k in ['f', 't']
+  for k in ['f', 't', 'F', 'T']
     for m in ['n', 'x']
-      "if user mapped anything to f or t, do not map over it; unfortunately this
-      "also means we cannot reset ; or , when f or t is invoked.
-      if g:sneak#opt[k.'_reset'] && maparg(k, m) ==# ''
-        call s:map_reset_key(k, m) | call s:map_reset_key(toupper(k), m)
+      "if user mapped anything to f or t, wrap it up so that ; and , jumps can
+      "be reset.
+      if g:sneak#opt[tolower(k).'_reset']
+        call s:map_reset_key(k, m)
       endif
     endfor
   endfor
